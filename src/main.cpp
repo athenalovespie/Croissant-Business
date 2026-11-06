@@ -1,14 +1,10 @@
-#include <Eigen/Dense>
-#include <fstream>
-#include <iomanip>
+#include "energy.h"
+#include "tests.h"
+#include "houdini_export.h"
+#include <cmath>
 #include <iostream>
 #include <tuple>
 #include <vector>
-
-
-using Matrix32 = Eigen::Matrix<double, 3, 2>;
-using Matrix22 = Eigen::Matrix<double, 2, 2>;
-using Matrix33 = Eigen::Matrix<double, 3, 3>;
 
 std::tuple<Eigen::VectorXd, Eigen::MatrixXd, Eigen::MatrixXd> get_svd(const Matrix32& F){
     Eigen::JacobiSVD<Eigen::MatrixXd> svd(F, Eigen::ComputeThinU | Eigen::ComputeThinV);
@@ -28,15 +24,14 @@ double psi(const Matrix32 &F, double lambda, double mew){
     return mew*E + .5*lambda*P;
 }
 
-
 Matrix32 D_psi(const Matrix32& F, double lambda, double mew){
-    std::cout << "Here is the matrix F:\n" << F << std::endl;
-    
+
+
     auto [sigmas, U, V] = get_svd(F);
     double sigma_1 = sigmas(0);
     double sigma_2 = sigmas(1);
 
-    std::cout << "\n here is U \n" << U << std::endl;
+
     Eigen::MatrixXd R = U*V.transpose();
     Eigen::MatrixXd C_inv = (F.transpose()*F).inverse();
     double detFTF = sigma_1*sigma_1*sigma_2*sigma_2;
@@ -85,47 +80,49 @@ Matrix32 DD_psi(const Matrix32& F, const Matrix32& delta_F, double lambda, doubl
 
 }
 
-//takes in 3 points and then finds the area between them, these points are on the cartesian plane
-//have X_i points , need all of the 
-
-//make a long vector full of points X
-//
-
 
 double area(int t, Eigen::VectorXi& mesh, Eigen::VectorXd& reference_components, Eigen::VectorXd& current_components){
     int V1 = mesh(3*t);
     int V2 = mesh(3*t+1);
     int V3 = mesh(3*t+2);
 
-    double x11 = current_components(3*V1);
-    double x12 = current_components(3*V1+1);
-    double x13 = current_components(3*V1+2);
+    double x11 = reference_components(3*V1);
+    double x12 = reference_components(3*V1+1);
 
-    double x21 = current_components(3*V2);
-    double x22 = current_components(3*V2+1);
-    double x23 = current_components(3*V2+2);
+    double x21 = reference_components(3*V2);
+    double x22 = reference_components(3*V2+1);
 
-    double x31 = current_components(3*V3);
-    double x32 = current_components(3*V3+1);
-    double x33 = current_components(3*V3+2);
+    double x31 = reference_components(3*V3);
+    double x32 = reference_components(3*V3+1);
 
-    return 1/2*std::abs(x11*(x22 - x12) + x21*(x32 - x12) +x31*(x12 -x22));
-
-    // return 1/2*std::abs(V1(0)*(V2(1)-V1(1)) + V2(0)*(V3(1) - V1(1)) + V3(0)*(V1(1) - V2(1)));
+    return .5*std::abs(x11*(x22 - x32) + x21*(x32 - x12) +x31*(x12 -x22));
 }
 
-// double get_components(int a, int b, int t, Eigen::VectorXi& mesh, Eigen::VectorXd& current_components){
-//     int vertex = mesh(3*t + (a-1));
-//     double xab = current_components(3*vertex + (b-1));
-//     return xab;
-// }
+Eigen::VectorXd get_vertexmass(Eigen::VectorXi& mesh, Eigen::VectorXd& reference_components, Eigen::VectorXd& current_components){
+    double p = 1000;
+    double h = 0.001;
+    
+    Eigen::VectorXd masses = Eigen::VectorXd::Zero(reference_components.size() / 3);
+    for (int t = 0; t < mesh.size()/3; t++){
+        int V1 = mesh(3*t);
+        int V2 = mesh(3*t+1);
+        int V3 = mesh(3*t+2);
+
+        double mass = p*area(t, mesh, reference_components, current_components)*h;
+        masses(V1) += mass/3;
+        masses(V2) += mass/3;
+        masses(V3) += mass/3;
+    }
+    return masses;
+}
+
 
 Matrix32 DS(int t, Eigen::VectorXi& mesh, Eigen::VectorXd& reference_components, Eigen::VectorXd& current_components){
-    
+
     int vertex1 = mesh(3*t);
     int vertex2 = mesh(3*t+1);
     int vertex3 = mesh(3*t+2);
-    
+
     //vertex 1 of triangle components
     double x11 = current_components(3*vertex1);
     double x12 = current_components(3*vertex1+1);
@@ -138,7 +135,7 @@ Matrix32 DS(int t, Eigen::VectorXi& mesh, Eigen::VectorXd& reference_components,
     double x31 = current_components(3*vertex3);
     double x32 = current_components(3*vertex3+1);
     double x33 = current_components(3*vertex3+2);
-    
+
     // for(int i = 0; i < 9*N; i++){
     // Eigen::VectorXi& vertices = mesh(3*t + (i-1));
     // Eigen::VectorXd& x = current_components(3*vertices(i) + (i-1)); //x(i)
@@ -146,11 +143,11 @@ Matrix32 DS(int t, Eigen::VectorXi& mesh, Eigen::VectorXd& reference_components,
     //vertex 2 of triangle components
 
     Matrix32 DS;
-    DS << (x11 - x33), (x21 - x31),
+    DS << (x11 - x31), (x21 - x31),
           (x12 - x32), (x22 - x32),
           (x13 - x33), (x23 - x33);
 
-    
+
     // double fraction = 1/((x11-x31)*(x22-x32) - (x21 - x31)(x12 - x32));
     return DS;
 }
@@ -159,7 +156,7 @@ Matrix22 Dm_inv(int t, Eigen::VectorXi& mesh, Eigen::VectorXd& reference_compone
     int vertex1 = mesh(3*t);
     int vertex2 = mesh(3*t+1);
     int vertex3 = mesh(3*t+2);
-    
+
     //vertex 1 of triangle components
     double X11 = reference_components(3*vertex1);
     double X12 = reference_components(3*vertex1+1);
@@ -178,7 +175,7 @@ Matrix22 Dm_inv(int t, Eigen::VectorXi& mesh, Eigen::VectorXd& reference_compone
               (X32 - X12), (X11 - X31);
 
     Dm_inv*= 1/((X11 - X31)*(X22 - X32) - (X21 - X31)*(X12 - X32));
-    
+
     return Dm_inv;
 }
 
@@ -195,147 +192,194 @@ double PE(int N, Eigen::VectorXi& mesh, Eigen::VectorXd& reference_components, E
     return PE;
 }
 
+Eigen::VectorXd gradient(int t, int N, Eigen::VectorXi& mesh, Eigen::VectorXd& reference_components, Eigen::VectorXd& current_components, double mew, double lambda){
+    Eigen::VectorXd f = Eigen::VectorXd::Zero(current_components.size());
 
 
-void test_psi() {
-    Matrix32 F;
-    F << 1, 2,
-         3, 4,
-         5, 6;
+    double DFX;
 
-    Matrix32 direction;
-    direction << 1, -1,
-                 2,  1,
-                -1,  2;
-    direction.normalize();
+    for(int t = 0; t < N; t++){
+        Matrix32 F1 = F(t, mesh, reference_components, current_components);
+        double area1 = area(t, mesh, reference_components, current_components);
 
-    const double mu = 2.0;
-    const double lambda = 3.0;
-    const double energy = psi(F, lambda, mu);
-    const Matrix32 gradient = D_psi(F, lambda, mu);
+        int vertex1 = mesh(3*t);
+        int vertex2 = mesh(3*t+1);
+        int vertex3 = mesh(3*t+2);
 
-    const double directional_derivative = (gradient.array() * direction.array()).sum();
+        double X11 = reference_components(3*vertex1);
+        double X12 = reference_components(3*vertex1+1);
+        double X13 = reference_components(3*vertex1+2);
 
-    constexpr int number_of_points = 100;
-    Eigen::VectorXd x_axis(number_of_points);
-    Eigen::VectorXd y_axis(number_of_points);
+        double X21 = reference_components(3*vertex2);
+        double X22 = reference_components(3*vertex2+1);
+        double X23 = reference_components(3*vertex2+2);
 
-    int i = 0;
-    for (int k = 10000; k>0; k-=100){
-        double epk = 1.0 / static_cast<double>(k);
-        double finite_difference =    //depends on psi
-        (psi(F + epk * direction, lambda, mu)
-        - psi(F - epk * direction, lambda, mu)) / (2.0 * epk);
-        double error = std::abs((finite_difference)-(directional_derivative));
-        x_axis[i] = epk;
-        y_axis[i] = error;
-        i++;
+        double X31 = reference_components(3*vertex3);
+        double X32 = reference_components(3*vertex3+1);
+        double X33 = reference_components(3*vertex3+2);
+
+        double c = 1/((X11 - X31)*(X22 - X32) - (X21 - X31)*(X12 - X32));
+            for(int i = 0; i < 3; i++){
+                Matrix32 P = D_psi(F1, lambda, mew);
+                for(int a = 0; a < 3; a++){
+                    for(int g = 0; g < 2; g ++){
+                        if (g == 0 && i == 0){
+                            DFX = c*(X22 -X32);
+                        }
+                        else if (g == 1 && i==0){
+                            DFX = c*(X31-X21);
+                        }
+                        else if (g == 0 && i==1){
+                            DFX = c*(X32 - X12);
+                        }
+                        else if (g == 1 && i==1){
+                            DFX = c*(X11 - X31);
+                        }
+                        else if (g == 0 && i==2){
+                            DFX = c*(X12-X22);
+                        }
+                        else if (g == 1 && i==2){
+                            DFX = c*(X21 - X11);
+                        }
+
+                        f[3*mesh[3*t +i] + a] += P(a, g)*DFX*area1;
+
+
+                }
+            }
+        }
+
     }
-
-    std::ofstream output_file("plot_data.csv");
-    if (!output_file) {
-        std::cerr << "Could not open plot_data.csv for writing.\n";
-        return;
-    }
-
-    output_file << "x_axis,y_axis\n";
-    output_file << std::setprecision(17);
-    for (Eigen::Index row = 0; row < x_axis.size(); ++row) {
-        output_file << x_axis(row) << ',' << y_axis(row) << '\n';
-    }
-
-    std::cout << "\nWrote " << x_axis.size()
-              << " plotting points to plot_data.csv\n";
-
+    return f;
 }
 
-void test_DD_psi()
-{
-    Matrix32 F;
-    F << 1, 2,
-         3, 4,
-         5, 6;
-
-    Matrix32 delta_F;
-    delta_F << 1, -1,
-               2,  1,
-              -1,  2;
-
-    // Make it a unit direction
-    delta_F.normalize();
-
-    const double mu = 2.0;
-    const double lambda = 3.0;
-
-    // Your analytical second derivative applied to delta_F
-    Matrix32 analytical =
-        DD_psi(F, delta_F, lambda, mu);
-
-    constexpr int number_of_points = 100;
-
-    Eigen::VectorXd x_axis(number_of_points);
-    Eigen::VectorXd y_axis(number_of_points);
-
-    int i = 0;
-
-    for (int k = 10000; k > 0; k -= 100)
-    {
-        double eps = 1.0 / static_cast<double>(k);
-
-        // Finite difference of the FIRST derivative
-        Matrix32 D_plus =
-            D_psi(F + eps * delta_F, lambda, mu);
-
-        Matrix32 D_minus =
-            D_psi(F - eps * delta_F, lambda, mu);
-
-        Matrix32 finite_difference =
-            (D_plus - D_minus) / (2.0 * eps);
-
-        // Frobenius norm of the difference
-        double error =
-            (finite_difference - analytical).norm();
-
-        x_axis[i] = eps;
-        y_axis[i] = error;
-
-        i++;
+Eigen::VectorXd grav_gradient(int t, int N, Eigen::VectorXi& mesh, Eigen::VectorXd& reference_components, Eigen::VectorXd& current_components, double mew, double lambda){
+    Eigen::VectorXd masses = get_vertexmass(mesh, reference_components, current_components);
+    Eigen::VectorXd G = Eigen::VectorXd::Zero(current_components.size());;
+        
+    for (int i = 0; i < masses.size(); i++){   
+        G(3*i+1)= masses(i)*(-9.8);
     }
-
-    std::ofstream output_file("DD_plot_data.csv");
-
-    if (!output_file)
-    {
-        std::cerr
-            << "Could not open DD_plot_data.csv for writing.\n";
-        return;
-    }
-
-    output_file << "x_axis,y_axis\n";
-    output_file << std::setprecision(17);
-
-    for (Eigen::Index row = 0; row < x_axis.size(); ++row)
-    {
-        output_file
-            << x_axis(row)
-            << ','
-            << y_axis(row)
-            << '\n';
-    }
-
-    std::cout
-        << "\nAnalytical DD_psi : delta_F:\n"
-        << analytical
-        << "\n";
-
-    std::cout
-        << "\nWrote "
-        << x_axis.size()
-        << " plotting points to DD_plot_data.csv\n";
+    
+    return gradient(0, N, mesh, reference_components, current_components, mew, lambda) - G;
 }
 
-int main()
+Eigen::VectorXd gradient_descent(int N,
+    Eigen::VectorXi& mesh,
+    Eigen::VectorXd& reference_components,
+    Eigen::VectorXd& current_components,
+    double mew,
+    double lambda,
+    const std::vector<int>& pinned_vertices){
+        
+    Eigen::VectorXd x = current_components;
+
+    Eigen::VectorXd masses =
+        get_vertexmass(mesh, reference_components, x);
+
+    // Total potential energy: elasticity + gravity.
+    auto total_energy = [&](Eigen::VectorXd& positions) {
+        double energy =
+            PE(N, mesh, reference_components, positions, mew, lambda);
+
+        for (Eigen::Index i = 0; i < masses.size(); ++i) {
+            energy += 9.8 * masses(i) * positions(3*i + 1);
+        }
+
+        return energy;
+    };
+
+    const int max_iterations = 1000;
+    const double tolerance = 1e-6;
+
+    for (int iteration = 0; iteration < max_iterations; ++iteration) {
+        Eigen::VectorXd g =
+            grav_gradient(
+                0, N, mesh, reference_components, x, mew, lambda
+            );
+
+        // Pinned vertices must not move in any coordinate.
+        for (int vertex : pinned_vertices) {
+            g.segment<3>(3*vertex).setZero();
+        }
+
+        if (!g.allFinite()) {
+            throw std::runtime_error("Gradient contains invalid values.");
+        }
+
+        // Stop when the gradient on the free vertices is small.
+        if (g.norm() < tolerance) {
+            return x;
+        }
+
+        double energy_before = total_energy(x);
+        double alpha = 0.1;
+        bool accepted = false;
+
+        for (int attempt = 0; attempt < 40; ++attempt) {
+            // The actual gradient-descent update:
+            Eigen::VectorXd trial = x - alpha * g;
+
+            // Keep boundary positions exactly at their starting values.
+            for (int vertex : pinned_vertices) {
+                trial.segment<3>(3*vertex) =
+                    current_components.segment<3>(3*vertex);
+            }
+
+            double energy_after = total_energy(trial);
+
+            // Require sufficient decrease in energy.
+            if (trial.allFinite() &&
+                std::isfinite(energy_after) &&
+                energy_after <=
+                    energy_before - 1e-4 * alpha * g.squaredNorm())
+            {
+                x = trial;
+                accepted = true;
+                break;
+            }
+
+            // Retry with a smaller step.
+            alpha *= 0.5;
+        }
+
+        if (!accepted) {
+            throw std::runtime_error(
+                "Could not find a step that decreases energy."
+            );
+        }
+    }
+
+    // Return the latest positions, even if not yet converged.
+    return x;
+}
+
+
+//try gradient descent
+//have codex vib code the visualization
+//use houdini, every step of gradient descent, visualize as a frame
+//have to code gravity
+//minimize potential with gradient decent
+//nonlinear gasuadel
+
+
+
+
+int main(int argc, char* argv[])
 {
+    if (argc > 1) {
+        if (std::string(argv[1]) != "--houdini" || argc > 3) {
+            std::cerr << "Usage: hello_eigen [--houdini [output_directory]]\n";
+            return 1;
+        }
+        try {
+            export_houdini_demo(argc == 3 ? argv[2] : "output/houdini");
+        } catch (const std::exception& error) {
+            std::cerr << error.what() << '\n';
+            return 1;
+        }
+        return 0;
+    }
     int N = 2;
     int indicies = 4;
     double mew = 3.0;
@@ -346,73 +390,35 @@ int main()
     mesh << 0, 1, 3,
              1, 2, 3;
 
-    reference_components << 0, 0, 0, 
-                            1, 0, 0, 
+    reference_components << 0, 0, 0,
+                            1, 0, 0,
                             1, 1, 0,
                             0, 1, 0;
-    
-    current_components <<   0, 0, 0, 
-                            1, 0, 0, 
+
+    current_components <<   0, 0, 0,
+                            1, 0, 0,
                             1, 1, 0,
                             0, 1, 0;
-    
+
     double PE1 = PE(N, mesh, reference_components, current_components, mew, lambda);
 
     std::cout << "\n Here is PE: " << PE1 << std::endl;
 
-    // Matrix32 F;
-    // F << 1, 2,
-    //      3, 4,
-    //      5, 6;
+    Matrix32 F;
+    F << 1, 2,
+         3, 4,
+         5, 6;
 
-    // double mew = 1.0;
-    // double lambda = 1.0;
-    // // Eigen::MatrixXd F = Eigen::MatrixXd::Random(3, 2);
+    // Eigen::MatrixXd F = Eigen::MatrixXd::Random(3, 2);
 
-    // double phi = psi(F, lambda, mew);
-    // Matrix32 D = D_psi(F, lambda , mew);
+    double phi = psi(F, lambda, mew);
+    Matrix32 D = D_psi(F, lambda , mew);
 
-    // test_psi();
-    // test_DD_psi();
+    test_psi();
+    test_DD_psi();
+    test_gradient();
 
-    // std::cout << "\n here is derivative of psi \n" << D <<std::endl;
-    // std::cout << "\n here is  psi \n" << phi <<std::endl;
-    // return 0;
+    std::cout << "\n here is derivative of psi \n" << D <<std::endl;
+    std::cout << "\n here is  psi \n" << phi <<std::endl;
+    return 0;
 }
-
-
-
-
-
-
-
-// void test_psi() {
-//     Matrix32 F;
-//     F << 1, 2,
-//          3, 4,
-//          5, 6;
-
-//     Matrix32 direction;
-//     direction << 1, -1,
-//                  2,  1,
-//                 -1,  2;
-//     direction.normalize();
-
-//     const double mu = 2.0;
-//     const double lambda = 3.0;
-//     const double epsilon = 1e-6;
-
-//     const double energy = psi(F, lambda, mu);
-//     const Matrix32 gradient = D_psi(F, lambda, mu);
-//     const double directional_derivative = (gradient.array() * direction.array()).sum(); //depends on d_psi
-//     const double finite_difference =    //depends on psi
-//         (psi(F + epsilon * direction, lambda, mu)
-//        - psi(F - epsilon * direction, lambda, mu)) / (2.0 * epsilon);
-
-//     std::cout << "psi(F): " << energy << "\n\n";
-//     std::cout << "d_psi(F):\n" << gradient << "\n\n";
-//     std::cout << "Gradient directional derivative: " << directional_derivative << "\n";
-//     std::cout << "Finite-difference derivative: " << finite_difference << "\n";
-//     std::cout << "Absolute error: "
-//               << std::abs(directional_derivative - finite_difference) << "\n";
-// }
